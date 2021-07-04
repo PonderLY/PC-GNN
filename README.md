@@ -42,3 +42,7 @@ python main.py --config ./config/pcgnn_yelpchi.yml
   year={2021}
 }
 ```
+
+## Other implementations
+
+Thanks for [Jack Huang](https://github.com/f26401004/PC-GNN) and [Ronald D. R. Pereira](https://github.com/ronaldpereira/pick-and-choose-gnn) for their kind implementations.
