@@ -4,7 +4,7 @@ This is the author implementation of "[Pick and Choose: A GNN-based Imbalanced L
 
 Slides and video could be found [here](https://ponderly.github.io/).
 
-Yang Liu, Xiang Ao, Zidi Qin, Jianfeng Chi, Jinghua Feng, Hao Yang and Qing He. 
+[Yang Liu](https://ponderly.github.io/), [Xiang Ao](https://aoxaustin.github.io/), Zidi Qin, Jianfeng Chi, Jinghua Feng, Hao Yang and [Qing He](http://people.ucas.ac.cn/~heqing?language=en). 
 
 ## Requirements
 
