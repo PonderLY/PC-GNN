@@ -35,13 +35,12 @@ seed: 72
 
 # hyper-parameters
 optimizer: 'adam'
-lr: 0.01 # 0.01
-weight_decay: 0.0005 # 0.0005
+lr: 0.01 
+weight_decay: 0.001
 batch_size: 1024
 num_epochs: 51
 valid_epochs: 5
-lambda_1: 2
-lambda_2: 0.001
+alpha: 2
 
 
 # Device

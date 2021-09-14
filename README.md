@@ -25,7 +25,7 @@ Put them in `/data` directory and run `unzip /data/Amazon.zip` and `unzip /data/
 
 Run `python src/data_process.py` to pre-process the data.
 
-Kindly note that there may be two versions of node features for YelpChi. The old version has a dimension of 100 and the new version is 32. The performance of the new one is much higher than the old one. In our paper, the results are reported based on the old features.
+Kindly note that there may be two versions of node features for YelpChi. The old version has a dimension of 100 and the new version is 32. In our paper, the results are reported based on the old features.
 
 ## Usage
 

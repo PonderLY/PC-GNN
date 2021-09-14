@@ -101,7 +101,7 @@ class ModelHandler(object):
 			enc_gcn = GCNEncoder(features, feat_data.shape[1], args.emb_size, adj_lists, agg_gcn, gcn=True, cuda=args.cuda)
 
 		if args.model == 'PCGNN':
-			gnn_model = PCALayer(2, inter1, args.lambda_1)
+			gnn_model = PCALayer(2, inter1, args.alpha)
 		elif args.model == 'SAGE':
 			# the vanilla GraphSAGE model as baseline
 			enc_sage.num_samples = 5
@@ -112,7 +112,7 @@ class ModelHandler(object):
 		if args.cuda:
 			gnn_model.cuda()
 
-		optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, gnn_model.parameters()), lr=args.lr, weight_decay=args.lambda_2)
+		optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, gnn_model.parameters()), lr=args.lr, weight_decay=args.weight_decay)
 
 		timestamp = time.time()
 		timestamp = datetime.datetime.fromtimestamp(int(timestamp)).strftime('%Y-%m-%d %H-%M-%S')
