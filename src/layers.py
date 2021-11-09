@@ -4,7 +4,6 @@ from torch.nn import init
 import torch.nn.functional as F
 from torch.autograd import Variable
 
-
 from operator import itemgetter
 import math
 
@@ -17,17 +16,17 @@ import math
 
 class InterAgg(nn.Module):
 
-	def __init__(self, features, feature_dim, train_pos,
-				 embed_dim, adj_lists, intraggs,
-				 inter='GNN', cuda=True):
+	def __init__(self, features, feature_dim, embed_dim, 
+				 train_pos, adj_lists, intraggs, inter='GNN', cuda=True):
 		"""
 		Initialize the inter-relation aggregator
 		:param features: the input node features or embeddings for all nodes
 		:param feature_dim: the input dimension
-		:param embed_dim: the output dimension
+		:param embed_dim: the embed dimension
+		:param train_pos: positive samples in training set
 		:param adj_lists: a list of adjacency lists for each single-relation graph
 		:param intraggs: the intra-relation aggregators used by each single-relation graph
-		:param inter: the aggregator type: 'Att', 'Weight', 'Mean', 'GNN'
+		:param inter: NOT used in this version, the aggregator type: 'Att', 'Weight', 'Mean', 'GNN'
 		:param cuda: whether to use GPU
 		"""
 		super(InterAgg, self).__init__()
@@ -50,20 +49,9 @@ class InterAgg(nn.Module):
 		# initial filtering thresholds
 		self.thresholds = [0.5, 0.5, 0.5]
 
-		# the activation function used by attention mechanism
-		self.leakyrelu = nn.LeakyReLU(0.2)
-
 		# parameter used to transform node embeddings before inter-relation aggregation
-		self.weight = nn.Parameter(torch.FloatTensor(self.embed_dim, self.feat_dim))
+		self.weight = nn.Parameter(torch.FloatTensor(self.embed_dim*len(intraggs)+self.feat_dim, self.embed_dim))
 		init.xavier_uniform_(self.weight)
-
-		# weight parameter for each relation used by CARE-Weight
-		self.alpha = nn.Parameter(torch.FloatTensor(self.embed_dim, 3))
-		init.xavier_uniform_(self.alpha)
-
-		# parameters used by attention layer
-		self.a = nn.Parameter(torch.FloatTensor(2 * self.embed_dim, 1))
-		init.xavier_uniform_(self.a)
 
 		# label predictor for similarity measure
 		self.label_clf = nn.Linear(self.feat_dim, 2)
@@ -126,10 +114,6 @@ class InterAgg(nn.Module):
 		r2_feats, r2_scores = self.intra_agg2.forward(nodes, labels, r2_list, center_scores, r2_scores, pos_scores, r2_sample_num_list, train_flag)
 		r3_feats, r3_scores = self.intra_agg3.forward(nodes, labels, r3_list, center_scores, r3_scores, pos_scores, r3_sample_num_list, train_flag)
 
-		# concat the intra-aggregated embeddings from each relation
-		# Eq. (9) in the paper
-		neigh_feats = torch.cat((r1_feats, r2_feats, r3_feats), dim=0)
-
 		# get features or embeddings for batch nodes
 		if self.cuda and isinstance(nodes, list):
 			index = torch.LongTensor(nodes).cuda()
@@ -140,35 +124,25 @@ class InterAgg(nn.Module):
 		# number of nodes in a batch
 		n = len(nodes)
 
-		# inter-relation aggregation steps
+		# concat the intra-aggregated embeddings from each relation
 		# Eq. (9) in the paper
-		if self.inter == 'Att':
-			# 1) Att Inter-relation Aggregator
-			combined, attention = att_inter_agg(len(self.adj_lists), self.leakyrelu, self_feats, neigh_feats, self.embed_dim,
-												self.weight, self.a, n, self.dropout, self.training, self.cuda)
-		elif self.inter == 'Weight':
-			# 2) Weight Inter-relation Aggregator
-			combined = weight_inter_agg(len(self.adj_lists), self_feats, neigh_feats, self.embed_dim, self.weight, self.alpha, n, self.cuda)
-			gem_weights = F.softmax(torch.sum(self.alpha, dim=0), dim=0).tolist()
-			if train_flag:
-				print(f'Weights: {gem_weights}')
-		elif self.inter == 'Mean':
-			# 3) Mean Inter-relation Aggregator
-			combined = mean_inter_agg(len(self.adj_lists), self_feats, neigh_feats, self.embed_dim, self.weight, n, self.cuda)
-		elif self.inter == 'GNN':
-			# 4) GNN Inter-relation Aggregator
-			combined = threshold_inter_agg(len(self.adj_lists), self_feats, neigh_feats, self.embed_dim, self.weight, self.thresholds, n, self.cuda)
+		cat_feats = torch.cat((self_feats, r1_feats, r2_feats, r3_feats), dim=1)
+
+		combined = F.relu(cat_feats.mm(self.weight).t())
 
 		return combined, center_scores
 
 
 class IntraAgg(nn.Module):
 
-	def __init__(self, features, feat_dim, train_pos, rho, cuda=False):
+	def __init__(self, features, feat_dim, embed_dim, train_pos, rho, cuda=False):
 		"""
 		Initialize the intra-relation aggregator
 		:param features: the input node features or embeddings for all nodes
 		:param feat_dim: the input dimension
+		:param embed_dim: the embed dimension
+		:param train_pos: positive samples in training set
+		:param rho: the ratio of the oversample neighbors for the minority class
 		:param cuda: whether to use GPU
 		"""
 		super(IntraAgg, self).__init__()
@@ -176,8 +150,11 @@ class IntraAgg(nn.Module):
 		self.features = features
 		self.cuda = cuda
 		self.feat_dim = feat_dim
+		self.embed_dim = embed_dim
 		self.train_pos = train_pos
 		self.rho = rho
+		self.weight = nn.Parameter(torch.FloatTensor(2*self.feat_dim, self.embed_dim))
+		init.xavier_uniform_(self.weight)
 
 	def forward(self, nodes, batch_labels, to_neighs_list, batch_scores, neigh_scores, pos_scores, sample_list, train_flag):
 		"""
@@ -211,13 +188,16 @@ class IntraAgg(nn.Module):
 		if self.cuda:
 			mask = mask.cuda()
 		num_neigh = mask.sum(1, keepdim=True)
-		mask = mask.div(num_neigh)
+		mask = mask.div(num_neigh)  # mean aggregator
 		if self.cuda:
+			self_feats = self.features(torch.LongTensor(nodes).cuda())
 			embed_matrix = self.features(torch.LongTensor(unique_nodes_list).cuda())
 		else:
+			self_feats = self.features(torch.LongTensor(nodes))
 			embed_matrix = self.features(torch.LongTensor(unique_nodes_list))
-		to_feats = mask.mm(embed_matrix)
-		to_feats = F.relu(to_feats)
+		agg_feats = mask.mm(embed_matrix)  # single relation aggregator
+		cat_feats = torch.cat((self_feats, agg_feats), dim=1)  # concat with last layer
+		to_feats = F.relu(cat_feats.mm(self.weight))
 		return to_feats, samp_scores
 
 
@@ -232,8 +212,6 @@ def choose_step_neighs(center_scores, center_labels, neigh_scores, neighs_list, 
     :param minor_list: minority node id list for each batch node in one relation
     :param sample_list: the number of neighbors kept for each batch node in one relation
 	:para sample_rate: the ratio of the oversample neighbors for the minority class
-    :return samp_neighs: the neighbor indices and neighbor simi scores
-    :return samp_score_diff: the average neighbor distances for each relation after filtering
     """
     samp_neighs = []
     samp_score_diff = []
@@ -313,165 +291,3 @@ def choose_step_test(center_scores, neigh_scores, neighs_list, sample_list):
 		samp_scores.append(selected_scores)
 
 	return samp_neighs, samp_scores
-
-
-def mean_inter_agg(num_relations, self_feats, neigh_feats, embed_dim, weight, n, cuda):
-	"""
-	Mean inter-relation aggregator
-	:param num_relations: number of relations in the graph
-	:param self_feats: batch nodes features or embeddings
-	:param neigh_feats: intra-relation aggregated neighbor embeddings for each relation
-	:param embed_dim: the dimension of output embedding
-	:param weight: parameter used to transform node embeddings before inter-relation aggregation
-	:param n: number of nodes in a batch
-	:param cuda: whether use GPU
-	:return: inter-relation aggregated node embeddings
-	"""
-
-	# transform batch node embedding and neighbor embedding in each relation with weight parameter
-	center_h = weight.mm(self_feats.t())
-	neigh_h = weight.mm(neigh_feats.t())
-
-	# initialize the final neighbor embedding
-	if cuda:
-		aggregated = torch.zeros(size=(embed_dim, n)).cuda()
-	else:
-		aggregated = torch.zeros(size=(embed_dim, n))
-
-	# sum neighbor embeddings together
-	for r in range(num_relations):
-		aggregated += neigh_h[:, r * n:(r + 1) * n]
-
-	# sum aggregated neighbor embedding and batch node embedding
-	# take the average of embedding and feed them to activation function
-	combined = F.relu((center_h + aggregated) / 4.0)
-
-	return combined
-
-
-def weight_inter_agg(num_relations, self_feats, neigh_feats, embed_dim, weight, alpha, n, cuda):
-	"""
-	Weight inter-relation aggregator
-	Reference: https://arxiv.org/abs/2002.12307
-	:param num_relations: number of relations in the graph
-	:param self_feats: batch nodes features or embeddings
-	:param neigh_feats: intra-relation aggregated neighbor embeddings for each relation
-	:param embed_dim: the dimension of output embedding
-	:param weight: parameter used to transform node embeddings before inter-relation aggregation
-	:param alpha: weight parameter for each relation used by CARE-Weight
-	:param n: number of nodes in a batch
-	:param cuda: whether use GPU
-	:return: inter-relation aggregated node embeddings
-	"""
-
-	# transform batch node embedding and neighbor embedding in each relation with weight parameter
-	center_h = weight.mm(self_feats.t())
-	neigh_h = weight.mm(neigh_feats.t())
-
-	# compute relation weights using softmax
-	w = F.softmax(alpha, dim=0)
-
-	# initialize the final neighbor embedding
-	if cuda:
-		aggregated = torch.zeros(size=(embed_dim, n)).cuda()
-	else:
-		aggregated = torch.zeros(size=(embed_dim, n))
-
-	# add weighted neighbor embeddings in each relation together
-	for r in range(num_relations):
-		aggregated += torch.mul(w[:, r].unsqueeze(1).repeat(1, n), neigh_h[:, r * n:(r + 1) * n])
-
-	# sum aggregated neighbor embedding and batch node embedding
-	# feed them to activation function
-	combined = F.relu(center_h + aggregated)
-
-	return combined
-
-
-def att_inter_agg(num_relations, att_layer, self_feats, neigh_feats, embed_dim, weight, a, n, dropout, training, cuda):
-	"""
-	Attention-based inter-relation aggregator
-	Reference: https://github.com/Diego999/pyGAT
-	:param num_relations: num_relations: number of relations in the graph
-	:param att_layer: the activation function used by the attention layer
-	:param self_feats: batch nodes features or embeddings
-	:param neigh_feats: intra-relation aggregated neighbor embeddings for each relation
-	:param embed_dim: the dimension of output embedding
-	:param weight: parameter used to transform node embeddings before inter-relation aggregation
-	:param a: parameters used by attention layer
-	:param n: number of nodes in a batch
-	:param dropout: dropout for attention layer
-	:param training: a flag indicating whether in the training or testing mode
-	:param cuda: whether use GPU
-	:return combined: inter-relation aggregated node embeddings
-	:return att: the attention weights for each relation
-	"""
-
-	# transform batch node embedding and neighbor embedding in each relation with weight parameter
-	center_h = self_feats.mm(weight.t())
-	neigh_h = neigh_feats.mm(weight.t())
-
-	# compute attention weights
-	combined = torch.cat((center_h.repeat(3, 1), neigh_h), dim=1)
-	e = att_layer(combined.mm(a))
-	attention = torch.cat((e[0:n, :], e[n:2 * n, :], e[2 * n:3 * n, :]), dim=1)
-	ori_attention = F.softmax(attention, dim=1)
-	attention = F.dropout(ori_attention, dropout, training=training)
-
-	# initialize the final neighbor embedding
-	if cuda:
-		aggregated = torch.zeros(size=(n, embed_dim)).cuda()
-	else:
-		aggregated = torch.zeros(size=(n, embed_dim))
-
-	# add neighbor embeddings in each relation together with attention weights
-	for r in range(num_relations):
-		aggregated += torch.mul(attention[:, r].unsqueeze(1).repeat(1, embed_dim), neigh_h[r * n:(r + 1) * n, :])
-
-	# sum aggregated neighbor embedding and batch node embedding
-	# feed them to activation function
-	combined = F.relu((center_h + aggregated).t())
-
-	# extract the attention weights
-	att = F.softmax(torch.sum(ori_attention, dim=0), dim=0)
-
-	return combined, att
-
-
-def threshold_inter_agg(num_relations, self_feats, neigh_feats, embed_dim, weight, threshold, n, cuda):
-	"""
-	GNN inter-relation aggregator
-	:param num_relations: number of relations in the graph
-	:param self_feats: batch nodes features or embeddings
-	:param neigh_feats: intra-relation aggregated neighbor embeddings for each relation
-	:param embed_dim: the dimension of output embedding
-	:param weight: parameter used to transform node embeddings before inter-relation aggregation
-	:param threshold: the neighbor filtering thresholds used as aggregating weights
-	:param n: number of nodes in a batch
-	:param cuda: whether use GPU
-	:return: inter-relation aggregated node embeddings
-	"""
-
-	# transform batch node embedding and neighbor embedding in each relation with weight parameter
-	center_h = weight.mm(self_feats.t())
-	neigh_h = weight.mm(neigh_feats.t())
-
-	if cuda:
-		# use thresholds as aggregating weights
-		w = torch.FloatTensor(threshold).repeat(weight.size(0), 1).cuda()
-
-		# initialize the final neighbor embedding
-		aggregated = torch.zeros(size=(embed_dim, n)).cuda()
-	else:
-		w = torch.FloatTensor(threshold).repeat(weight.size(0), 1)
-		aggregated = torch.zeros(size=(embed_dim, n))
-
-	# add weighted neighbor embeddings in each relation together
-	for r in range(num_relations):
-		aggregated += torch.mul(w[:, r].unsqueeze(1).repeat(1, n), neigh_h[:, r * n:(r + 1) * n])
-
-	# sum aggregated neighbor embedding and batch node embedding
-	# feed them to activation function
-	combined = F.relu(center_h + aggregated)
-
-	return combined

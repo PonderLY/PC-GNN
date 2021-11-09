@@ -46,9 +46,12 @@ class ModelHandler(object):
 		print(f'Run on {args.data_name}, postive/total num: {np.sum(labels)}/{len(labels)}, train num {len(y_train)},'+
 			f'valid num {len(y_valid)}, test num {len(y_test)}, test positive num {np.sum(y_test)}')
 		print(f"Classification threshold: {args.thres}")
+		print(f"Feature dimension: {feat_data.shape[1]}")
+
 
 		# split pos neg sets for under-sampling
 		train_pos, train_neg = pos_neg_split(idx_train, y_train)
+
 		
 		# if args.data == 'amazon':
 		feat_data = normalize(feat_data)
@@ -57,8 +60,7 @@ class ModelHandler(object):
 		# scaler.fit(train_feats)
 		# feat_data = scaler.transform(feat_data)
 		args.cuda = not args.no_cuda and torch.cuda.is_available()
-		if args.cuda:
-			os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_id
+		os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_id
 
 		# set input graph
 		if args.model == 'SAGE' or args.model == 'GCN':
@@ -88,10 +90,10 @@ class ModelHandler(object):
 
 		# build one-layer models
 		if args.model == 'PCGNN':
-			intra1 = IntraAgg(features, feat_data.shape[1], self.dataset['train_pos'], args.rho, cuda=args.cuda)
-			intra2 = IntraAgg(features, feat_data.shape[1], self.dataset['train_pos'], args.rho, cuda=args.cuda)
-			intra3 = IntraAgg(features, feat_data.shape[1], self.dataset['train_pos'], args.rho, cuda=args.cuda)
-			inter1 = InterAgg(features, feat_data.shape[1], self.dataset['train_pos'], args.emb_size, 
+			intra1 = IntraAgg(features, feat_data.shape[1], args.emb_size, self.dataset['train_pos'], args.rho, cuda=args.cuda)
+			intra2 = IntraAgg(features, feat_data.shape[1], args.emb_size, self.dataset['train_pos'], args.rho, cuda=args.cuda)
+			intra3 = IntraAgg(features, feat_data.shape[1], args.emb_size, self.dataset['train_pos'], args.rho, cuda=args.cuda)
+			inter1 = InterAgg(features, feat_data.shape[1], args.emb_size, self.dataset['train_pos'], 
 							  adj_lists, [intra1, intra2, intra3], inter=args.multi_relation, cuda=args.cuda)
 		elif args.model == 'SAGE':
 			agg_sage = MeanAggregator(features, cuda=args.cuda)
